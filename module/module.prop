@@ -1,0 +1,6 @@
+id=phdroid-op15
+name=phDroid OP15 (auto)
+version=v1.0.24-op15
+versionCode=10025
+author=op15-lkm
+description=6 个内核模块，原厂 GKI 6.12.x-android16-6/KMI gen 6；开机自动加载（无 no_boot），仍保留 bootloop 守卫。立即加载：sh load.sh

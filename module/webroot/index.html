@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>phDroid OP15</title>
+<style>
+:root{--bg:#0e1014;--card:#171a21;--line:#242936;--fg:#e8eaf0;--dim:#8b93a7;--ok:#39d98a;--accent:#4c8dff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;padding:16px 14px 28px;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,system-ui,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}
+h1{margin:0 0 2px;font-size:17px}
+.sub{color:var(--dim);font-size:12px;margin-bottom:14px;min-height:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 14px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row label{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);margin:0}
+.name{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#3a3f4c;flex:0 0 auto}
+.dot.on{background:var(--ok);box-shadow:0 0 8px rgba(57,217,138,.7)}
+.state{color:var(--dim);font-size:12px}
+.btns{display:flex;gap:10px;margin:14px 0 10px}
+button{flex:1;padding:12px 10px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-size:14px;font-weight:600}
+button.ghost{background:#252b38;color:var(--fg)}
+button:disabled{opacity:.45}
+.hint{color:var(--dim);font-size:12px;margin:0 2px 14px}
+pre{margin:0;background:#0a0c10;border:1px solid var(--line);border-radius:12px;padding:10px;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#c9d1e3;white-space:pre-wrap;word-break:break-all;max-height:38vh;overflow:auto}
+</style>
+</head>
+<body>
+<h1>phDroid OP15</h1>
+<div class="sub" id="sub">读取状态…</div>
+<div class="card" id="list"></div>
+<div class="btns">
+  <button id="load">加载选中</button>
+  <button id="unload" class="ghost">全部卸载</button>
+</div>
+<div class="hint">卸载前先停容器；已加载的模块会自动跳过。</div>
+<div class="card"><pre id="log">（无输出）</pre></div>
+<script>
+(function(){
+"use strict";
+var MOD="/data/adb/modules/phdroid-op15", seq=0, busy=false;
+var MODS=[
+ {ko:"droid_lkm",arg:"gate=0 mqueue=1 nspid=1 nspid_append=1 skip_sysvipc=0 no_fake_ns=0 skip_do_exit=0"},
+ {ko:"droid_lkm_vendor",arg:"ghost=1 ghost_match=oplus_ pid_max_cap=0 ddl=1"},
+ {ko:"droid_lkm_misc",arg:""},
+ {ko:"droid_lkm_pids",arg:""},
+ {ko:"macvlan",arg:""},
+ {ko:"ip6table_nat",arg:""}
+];
+function el(id){return document.getElementById(id);}
+function setLog(s){el("log").textContent=s||"（无输出）";}
+function sh(cmd,ms){
+ return new Promise(function(res){
+  var api=window.ksu||window.kernelsu;
+  if(!api||typeof api.exec!=="function"){res({errno:-1,stdout:"",stderr:"无 WebUI API（需要 KernelSU / APatch）"});return;}
+  var name="phcb"+(Date.now())+"_"+(seq++),done=false,timer=0;
+  var fin=function(e,o,s){if(done)return;done=true;if(timer)clearTimeout(timer);delete window[name];res({errno:e|0,stdout:o||"",stderr:s||""});};
+  window[name]=fin;
+  try{api.exec(cmd,"{}",name);}catch(err){fin(-1,"",String(err));return;}
+  timer=setTimeout(function(){fin(-1,"","超时");},ms||20000);
+ });
+}
+function build(){
+ var box=el("list");box.innerHTML="";
+ MODS.forEach(function(m,i){
+  var d=document.createElement("div");d.className="row";
+  d.innerHTML='<label><input type="checkbox" data-i="'+i+'" checked><span class="dot" id="d'+i+'"></span><span class="name">'+m.ko+'</span></label><span class="state" id="s'+i+'">–</span>';
+  box.appendChild(d);
+ });
+}
+function refresh(){
+ var cmd=MODS.map(function(m){return 'grep -q "^'+m.ko+' " /proc/modules && echo 1 || echo 0';}).join("; ");
+ return sh(cmd,8000).then(function(r){
+  var L=(r.stdout||"").trim().split("\n"),n=0;
+  MODS.forEach(function(m,i){
+   var on=(L[i]==="1");if(on)n++;
+   el("d"+i).className="dot"+(on?" on":"");
+   el("s"+i).textContent=on?"已加载":"未加载";
+  });
+  el("sub").textContent="已加载 "+n+"/"+MODS.length+(r.stderr?(" · "+r.stderr):"");
+  return n;
+ });
+}
+function loadSel(){
+ if(busy)return;
+ var pick=[];
+ MODS.forEach(function(m,i){var cb=document.querySelector('input[data-i="'+i+'"]');if(cb&&cb.checked)pick.push(m);});
+ if(!pick.length){setLog("没有勾选任何模块");return;}
+ busy=true;el("load").disabled=true;
+ var cmd=pick.map(function(m){
+  var ko=MOD+"/ko/"+m.ko+".ko";
+  return 'grep -q "^'+m.ko+' " /proc/modules || insmod '+ko+(m.arg?(" "+m.arg):"");
+ }).join("; ")+"; echo __DONE__";
+ setLog("加载中…");
+ sh(cmd,30000).then(function(r){setLog((r.stdout||"")+(r.stderr||""));return refresh();})
+ .then(function(){busy=false;el("load").disabled=false;},function(e){setLog("出错："+String(e));busy=false;el("load").disabled=false;});
+}
+function unloadAll(){
+ if(busy)return;
+ busy=true;el("unload").disabled=true;
+ var cmd=MODS.slice().reverse().map(function(m){return 'rmmod '+m.ko+' 2>/dev/null';}).join("; ")+"; echo __DONE__";
+ setLog("卸载中…");
+ sh(cmd,30000).then(function(r){setLog((r.stdout||"")+(r.stderr||""));return refresh();})
+ .then(function(){busy=false;el("unload").disabled=false;},function(e){setLog("出错："+String(e));busy=false;el("unload").disabled=false;});
+}
+build();
+el("load").addEventListener("click",loadSel);
+el("unload").addEventListener("click",unloadAll);
+refresh();
+setInterval(refresh,5000);
+})();
+</script>
+</body>
+</html>
